@@ -1,28 +1,26 @@
-import { env } from 'cloudflare:workers';
-
 const SESSION_COOKIE = 'portal_admin_session';
 const SESSION_MAX_AGE = 60 * 60 * 12;
+const DEFAULT_ADMIN_USERNAME = 'admin';
+const DEFAULT_ADMIN_PASSWORD = 'future@12345';
+const DEFAULT_SESSION_SECRET = 'portal-admin-session-fallback-v1-8cb17a6de6b44569';
 
 const encoder = new TextEncoder();
 
-type PortalEnvironment = Cloudflare.Env & {
-  PORTAL_ADMIN_USERNAME?: string;
-  PORTAL_ADMIN_PASSWORD?: string;
-  PORTAL_SESSION_SECRET?: string;
-};
-
-const runtimeEnvironment = env as PortalEnvironment;
+function runtimeValue(key: string) {
+  if (typeof process === 'undefined') return undefined;
+  return process.env[key];
+}
 
 function configuredUsername() {
-  return runtimeEnvironment.PORTAL_ADMIN_USERNAME ?? process.env.PORTAL_ADMIN_USERNAME ?? 'admin';
+  return runtimeValue('PORTAL_ADMIN_USERNAME') ?? DEFAULT_ADMIN_USERNAME;
 }
 
 function configuredPassword() {
-  return runtimeEnvironment.PORTAL_ADMIN_PASSWORD ?? process.env.PORTAL_ADMIN_PASSWORD ?? '';
+  return runtimeValue('PORTAL_ADMIN_PASSWORD') ?? DEFAULT_ADMIN_PASSWORD;
 }
 
 function sessionSecret() {
-  return runtimeEnvironment.PORTAL_SESSION_SECRET ?? process.env.PORTAL_SESSION_SECRET ?? '';
+  return runtimeValue('PORTAL_SESSION_SECRET') ?? DEFAULT_SESSION_SECRET;
 }
 
 async function digest(value: string) {

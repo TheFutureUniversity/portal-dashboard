@@ -1,24 +1,19 @@
-import { env } from 'cloudflare:workers';
-
 import { requestHasValidSession } from '../../auth/_session';
 
-type InvoiceApiEnvironment = Cloudflare.Env & {
-  INVOICE_API_BASE_URL?: string;
-  INVOICE_API_BEARER_TOKEN?: string;
-};
-
-const runtimeEnvironment = env as InvoiceApiEnvironment;
 const DEFAULT_API_BASE_URL = 'https://api.thefuture.university';
 
+function runtimeValue(key: string) {
+  if (typeof process === 'undefined') return undefined;
+  return process.env[key];
+}
+
 function apiBaseUrl() {
-  return (runtimeEnvironment.INVOICE_API_BASE_URL
-    ?? process.env.INVOICE_API_BASE_URL
+  return (runtimeValue('INVOICE_API_BASE_URL')
     ?? DEFAULT_API_BASE_URL).replace(/\/$/, '');
 }
 
 function bearerToken() {
-  return runtimeEnvironment.INVOICE_API_BEARER_TOKEN
-    ?? process.env.INVOICE_API_BEARER_TOKEN
+  return runtimeValue('INVOICE_API_BEARER_TOKEN')
     ?? '';
 }
 
