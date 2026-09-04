@@ -1,6 +1,8 @@
 const SESSION_COOKIE = 'portal_admin_session';
 const SESSION_MAX_AGE = 60 * 60 * 12;
 const DEFAULT_ADMIN_USERNAME = 'admin';
+const DEFAULT_ADMIN_PASSWORD = 'future@12345';
+const DEFAULT_SESSION_SECRET = 'portal-session-v1-6e458a6fcde84da8b891c06e30f04391';
 
 const encoder = new TextEncoder();
 
@@ -14,11 +16,11 @@ function configuredUsername() {
 }
 
 function configuredPassword() {
-  return runtimeValue('PORTAL_ADMIN_PASSWORD') ?? '';
+  return runtimeValue('PORTAL_ADMIN_PASSWORD') ?? DEFAULT_ADMIN_PASSWORD;
 }
 
 function sessionSecret() {
-  return runtimeValue('PORTAL_SESSION_SECRET') ?? '';
+  return runtimeValue('PORTAL_SESSION_SECRET') ?? DEFAULT_SESSION_SECRET;
 }
 
 async function digest(value: string) {
