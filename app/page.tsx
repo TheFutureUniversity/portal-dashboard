@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import type { FormEvent } from 'react';
 
 type Invoice = {
   id: string;
@@ -130,6 +131,11 @@ function responseError(status: number) {
 }
 
 export default function Home() {
+  const [authState, setAuthState] = useState<'checking' | 'signedOut' | 'signedIn'>('checking');
+  const [loginId, setLoginId] = useState('admin');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [isSigningIn, setIsSigningIn] = useState(false);
   const [page, setPage] = useState(1);
   const [invoices, setInvoices] = useState<Invoice[]>(demoInvoices.slice(0, PAGE_SIZE));
   const [pagination, setPagination] = useState<Pagination>(defaultPagination);
@@ -145,6 +151,21 @@ export default function Home() {
   const previewRequestRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
+    const controller = new AbortController();
+    fetch('/api/auth/session', {
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    })
+      .then((response) => setAuthState(response.ok ? 'signedIn' : 'signedOut'))
+      .catch((error) => {
+        if ((error as Error).name !== 'AbortError') setAuthState('signedOut');
+      });
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    if (authState !== 'signedIn') return;
     const controller = new AbortController();
 
     async function loadInvoices() {
@@ -179,7 +200,7 @@ export default function Home() {
 
     loadInvoices();
     return () => controller.abort();
-  }, [page]);
+  }, [authState, page]);
 
   useEffect(() => {
     if (!preview) return;
@@ -285,6 +306,35 @@ export default function Home() {
     }
   }
 
+  async function signIn(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsSigningIn(true);
+    setLoginError('');
+    try {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ username: loginId, password: loginPassword }),
+      });
+      const payload = await response.json().catch(() => ({ message: '' })) as { message?: string };
+      if (!response.ok) throw new Error(payload.message || 'Unable to sign in.');
+      setLoginPassword('');
+      setAuthState('signedIn');
+    } catch (error) {
+      setLoginError((error as Error).message || 'Unable to sign in.');
+    } finally {
+      setIsSigningIn(false);
+    }
+  }
+
+  async function signOut() {
+    closePreview();
+    await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => undefined);
+    setAuthState('signedOut');
+    setLoginPassword('');
+  }
+
   const changePage = (nextPage: number) => {
     if (nextPage < 1 || nextPage > pagination.totalPages || nextPage === page) return;
     setPage(nextPage);
@@ -293,6 +343,34 @@ export default function Home() {
 
   const firstRecord = pagination.totalRecords === 0 ? 0 : (pagination.page - 1) * pagination.pageSize + 1;
   const lastRecord = Math.min(pagination.page * pagination.pageSize, pagination.totalRecords);
+
+  if (authState === 'checking') {
+    return (
+      <main className="auth-shell">
+        <div className="auth-loading" role="status"><span className="spinner" /><p>Preparing secure portal…</p></div>
+      </main>
+    );
+  }
+
+  if (authState === 'signedOut') {
+    return (
+      <main className="auth-shell">
+        <section className="login-card" aria-labelledby="login-title">
+          <div className="login-brand"><span className="brand-mark">P</span><span>Portal</span></div>
+          <div className="login-copy"><span>ADMIN ACCESS</span><h1 id="login-title">Welcome back</h1><p>Sign in to view and manage GST invoices.</p></div>
+          <form onSubmit={signIn}>
+            <label htmlFor="user-id">User ID</label>
+            <input id="user-id" name="username" autoComplete="username" value={loginId} onChange={(event) => setLoginId(event.target.value)} required />
+            <label htmlFor="password">Password</label>
+            <input id="password" name="password" type="password" autoComplete="current-password" value={loginPassword} onChange={(event) => setLoginPassword(event.target.value)} placeholder="Enter your password" required autoFocus />
+            {loginError && <p className="login-error" role="alert">{loginError}</p>}
+            <button type="submit" disabled={isSigningIn}>{isSigningIn ? 'Signing in…' : 'Sign in'}</button>
+          </form>
+          <p className="login-security"><i />Protected administrator portal</p>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main className="app-shell">
@@ -304,7 +382,7 @@ export default function Home() {
         <div className="sidebar-note"><span className="status-dot" />Invoice files stay private</div>
         <div className="sidebar-footer">
           <div className="avatar">AM</div>
-          <div><strong>Arjun Mehta</strong><span>Administrator</span></div>
+          <div><strong>Admin</strong><span>Administrator</span></div>
         </div>
       </aside>
 
@@ -312,13 +390,12 @@ export default function Home() {
         <header className="topbar">
           <div className="mobile-brand"><span className="brand-mark">P</span>Portal</div>
           <div className="topbar-label">Invoice management</div>
-          <button className="profile-button" type="button" aria-label="Account menu"><span>AM</span><b>Arjun Mehta</b><i>⌄</i></button>
+          <button className="profile-button" type="button" onClick={signOut} aria-label="Sign out"><span>AM</span><b>Admin</b><i>Sign out</i></button>
         </header>
 
         <div className="content">
           <div className="page-heading">
             <div><p className="eyebrow">DOCUMENTS</p><h1>GST Invoices</h1><p>View and download customer purchase invoices.</p></div>
-            <div className="invoice-count"><strong>{pagination.totalRecords}</strong><span>Total invoices</span></div>
           </div>
 
           <div className={`table-card ${isLoadingList ? 'is-loading' : ''}`} aria-busy={isLoadingList}>
