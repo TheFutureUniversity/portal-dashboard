@@ -35,7 +35,6 @@ const productTypeLabels: Record<string, string> = {
 };
 
 const PAGE_SIZE = 10;
-const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL ?? '').replace(/\/$/, '');
 
 const emptyPagination: Pagination = {
   page: 1,
@@ -47,7 +46,7 @@ const emptyPagination: Pagination = {
 };
 
 function apiUrl(path: string) {
-  return `${API_BASE_URL}/api/v1${path}`;
+  return `/api/v1${path}`;
 }
 
 function formatCurrency(value: number) {
