@@ -35,6 +35,7 @@ const productTypeLabels: Record<string, string> = {
 };
 
 const PAGE_SIZE = 10;
+const API_BASE_URL = 'https://api.thefuture.university';
 
 const emptyPagination: Pagination = {
   page: 1,
@@ -46,7 +47,7 @@ const emptyPagination: Pagination = {
 };
 
 function apiUrl(path: string) {
-  return `/api/v1${path}`;
+  return `${API_BASE_URL}/api/v1${path}`;
 }
 
 function formatCurrency(value: number) {
