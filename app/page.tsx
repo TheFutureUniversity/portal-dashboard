@@ -1,16 +1,29 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 type Invoice = {
-  serial: number;
+  id: string;
+  serialNumber: number;
   invoiceNumber: string;
   customerId: string;
   customerName: string;
-  product: string;
+  productName: string;
   productType: string;
-  date: string;
+  purchaseDate: string;
   amount: number;
+  currency: string;
+  status: string;
+  previewAvailable?: boolean;
+};
+
+type Pagination = {
+  page: number;
+  pageSize: number;
+  totalRecords: number;
+  totalPages: number;
+  hasPreviousPage: boolean;
+  hasNextPage: boolean;
 };
 
 const customers = [
@@ -22,83 +35,264 @@ const customers = [
 ];
 
 const products = [
-  ['Swing Trading Bootcamp', 'LIVE Learning Course'],
-  ['Options Strategy eBook', 'eBooks'],
-  ['Trading Desk Journal', 'Physical Products'],
-  ['Emerald Focus Stone', 'Semi Precious Gemstones'],
-  ['Momentum Trading Masterclass', 'LIVE Learning Course'],
-  ['Price Action Playbook', 'eBooks'],
-  ['Market Discipline Planner', 'Physical Products'],
-  ['Amethyst Clarity Stone', 'Semi Precious Gemstones'],
-  ['Technical Analysis Intensive', 'LIVE Learning Course'],
-  ['Trading Psychology Guide', 'eBooks'],
+  ['Swing Trading Bootcamp', 'LIVE_LEARNING_COURSE'],
+  ['Options Strategy eBook', 'EBOOK'],
+  ['Trading Desk Journal', 'PHYSICAL_PRODUCT'],
+  ['Emerald Focus Stone', 'SEMI_PRECIOUS_GEMSTONE'],
+  ['Momentum Trading Masterclass', 'LIVE_LEARNING_COURSE'],
+  ['Price Action Playbook', 'EBOOK'],
+  ['Market Discipline Planner', 'PHYSICAL_PRODUCT'],
+  ['Amethyst Clarity Stone', 'SEMI_PRECIOUS_GEMSTONE'],
+  ['Technical Analysis Intensive', 'LIVE_LEARNING_COURSE'],
+  ['Trading Psychology Guide', 'EBOOK'],
 ];
 
-const amounts = [14999, 1499, 2899, 4599, 9999, 899, 1899, 3299, 11999, 1199];
+const productTypeLabels: Record<string, string> = {
+  LIVE_LEARNING_COURSE: 'LIVE Learning Course',
+  EBOOK: 'eBooks',
+  PHYSICAL_PRODUCT: 'Physical Products',
+  SEMI_PRECIOUS_GEMSTONE: 'Semi Precious Gemstones',
+};
 
-const invoices: Invoice[] = Array.from({ length: 200 }, (_, index) => {
+const amounts = [14999, 1499, 2899, 4599, 9999, 899, 1899, 3299, 11999, 1199];
+const PAGE_SIZE = 10;
+const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL ?? '').replace(/\/$/, '');
+
+const demoInvoices: Invoice[] = Array.from({ length: 200 }, (_, index) => {
   const customer = customers[index % customers.length];
   const product = products[index % products.length];
   const purchaseDate = new Date(Date.UTC(2026, 7, 28 - index));
   return {
-    serial: index + 1,
+    id: `inv_${String(482 - index).padStart(5, '0')}`,
+    serialNumber: index + 1,
     invoiceNumber: `GST-2026-${String(482 - index).padStart(5, '0')}`,
     customerId: customer[0],
     customerName: customer[1],
-    product: product[0],
+    productName: product[0],
     productType: product[1],
-    date: purchaseDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' }),
+    purchaseDate: purchaseDate.toISOString().slice(0, 10),
     amount: amounts[index % amounts.length],
+    currency: 'INR',
+    status: 'PAID',
+    previewAvailable: true,
   };
 });
 
-const PAGE_SIZE = 10;
-const TOTAL_PAGES = 20;
-const formatCurrency = (value: number) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(value);
+const defaultPagination: Pagination = {
+  page: 1,
+  pageSize: PAGE_SIZE,
+  totalRecords: 200,
+  totalPages: 20,
+  hasPreviousPage: false,
+  hasNextPage: true,
+};
 
-function visiblePages(current: number) {
-  if (current <= 3) return [1, 2, 3, 4, 'dots', 20];
-  if (current >= 18) return [1, 'dots', 17, 18, 19, 20];
-  return [1, 'dots', current - 1, current, current + 1, 'dots-end', 20];
+function apiUrl(path: string) {
+  return `${API_BASE_URL}/api/v1${path}`;
+}
+
+function formatCurrency(value: number, currency = 'INR') {
+  return new Intl.NumberFormat('en-IN', {
+    style: 'currency',
+    currency,
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
+function formatDate(value: string) {
+  const isoDate = /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00Z` : value;
+  return new Date(isoDate).toLocaleDateString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
+function visiblePages(current: number, total: number) {
+  if (total <= 6) return Array.from({ length: total }, (_, index) => index + 1);
+  if (current <= 3) return [1, 2, 3, 4, 'dots', total];
+  if (current >= total - 2) return [1, 'dots', total - 3, total - 2, total - 1, total];
+  return [1, 'dots', current - 1, current, current + 1, 'dots-end', total];
+}
+
+function filenameFromHeader(header: string | null, fallback: string) {
+  const encodedMatch = header?.match(/filename\*=UTF-8''([^;]+)/i);
+  if (encodedMatch) return decodeURIComponent(encodedMatch[1]);
+  const plainMatch = header?.match(/filename="?([^";]+)"?/i);
+  return plainMatch?.[1] ?? fallback;
+}
+
+function responseError(status: number) {
+  if (status === 401) return 'Your session has expired. Please sign in again.';
+  if (status === 403 || status === 404) return 'This invoice is not available to your account.';
+  return 'The invoice service is temporarily unavailable.';
 }
 
 export default function Home() {
   const [page, setPage] = useState(1);
+  const [invoices, setInvoices] = useState<Invoice[]>(demoInvoices.slice(0, PAGE_SIZE));
+  const [pagination, setPagination] = useState<Pagination>(defaultPagination);
+  const [isLoadingList, setIsLoadingList] = useState(false);
+  const [usingDemoData, setUsingDemoData] = useState(true);
   const [preview, setPreview] = useState<Invoice | null>(null);
+  const [previewUrl, setPreviewUrl] = useState('');
+  const [previewError, setPreviewError] = useState('');
+  const [isLoadingPreview, setIsLoadingPreview] = useState(false);
+  const [downloadingId, setDownloadingId] = useState('');
   const [notice, setNotice] = useState('');
-  const pageInvoices = useMemo(() => invoices.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [page]);
+  const previewUrlRef = useRef('');
+  const previewRequestRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadInvoices() {
+      setIsLoadingList(true);
+      try {
+        const response = await fetch(apiUrl(`/invoices?page=${page}&pageSize=${PAGE_SIZE}`), {
+          credentials: 'include',
+          headers: { Accept: 'application/json' },
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(`Invoice list returned ${response.status}`);
+        const payload = await response.json() as { data: Invoice[]; pagination: Pagination };
+        if (!Array.isArray(payload.data) || !payload.pagination) throw new Error('Invalid invoice response');
+        setInvoices(payload.data);
+        setPagination(payload.pagination);
+        setUsingDemoData(false);
+      } catch (error) {
+        if ((error as Error).name === 'AbortError') return;
+        const start = (page - 1) * PAGE_SIZE;
+        setInvoices(demoInvoices.slice(start, start + PAGE_SIZE));
+        setPagination({
+          ...defaultPagination,
+          page,
+          hasPreviousPage: page > 1,
+          hasNextPage: page < defaultPagination.totalPages,
+        });
+        setUsingDemoData(true);
+      } finally {
+        if (!controller.signal.aborted) setIsLoadingList(false);
+      }
+    }
+
+    loadInvoices();
+    return () => controller.abort();
+  }, [page]);
 
   useEffect(() => {
     if (!preview) return;
-    const closeOnEscape = (event: KeyboardEvent) => event.key === 'Escape' && setPreview(null);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      previewRequestRef.current?.abort();
+      previewRequestRef.current = null;
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = '';
+      setPreviewUrl('');
+      setPreview(null);
+      setPreviewError('');
+      setIsLoadingPreview(false);
+    };
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
   }, [preview]);
 
   useEffect(() => {
     if (!notice) return;
-    const timeout = window.setTimeout(() => setNotice(''), 2600);
+    const timeout = window.setTimeout(() => setNotice(''), 3000);
     return () => window.clearTimeout(timeout);
   }, [notice]);
 
+  useEffect(() => () => {
+    previewRequestRef.current?.abort();
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+  }, []);
+
+  function clearPreviewAsset() {
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    previewUrlRef.current = '';
+    setPreviewUrl('');
+  }
+
+  function closePreview() {
+    previewRequestRef.current?.abort();
+    previewRequestRef.current = null;
+    clearPreviewAsset();
+    setPreview(null);
+    setPreviewError('');
+    setIsLoadingPreview(false);
+  }
+
+  async function openPreview(invoice: Invoice) {
+    previewRequestRef.current?.abort();
+    clearPreviewAsset();
+    setPreview(invoice);
+    setPreviewError('');
+    setIsLoadingPreview(true);
+
+    const controller = new AbortController();
+    previewRequestRef.current = controller;
+
+    try {
+      const response = await fetch(apiUrl(`/invoices/${encodeURIComponent(invoice.id)}/preview`), {
+        credentials: 'include',
+        headers: { Accept: 'application/pdf' },
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(responseError(response.status));
+      const pdf = await response.blob();
+      if (!pdf.type.toLowerCase().includes('pdf')) throw new Error('The server did not return a valid PDF invoice.');
+      const objectUrl = URL.createObjectURL(pdf);
+      previewUrlRef.current = objectUrl;
+      setPreviewUrl(objectUrl);
+    } catch (error) {
+      if ((error as Error).name !== 'AbortError') {
+        setPreviewError((error as Error).message || 'The invoice preview could not be loaded.');
+      }
+    } finally {
+      if (!controller.signal.aborted) setIsLoadingPreview(false);
+    }
+  }
+
+  async function downloadInvoice(invoice: Invoice) {
+    setDownloadingId(invoice.id);
+    try {
+      const response = await fetch(apiUrl(`/invoices/${encodeURIComponent(invoice.id)}/download`), {
+        credentials: 'include',
+        headers: { Accept: 'application/pdf' },
+      });
+      if (!response.ok) throw new Error(responseError(response.status));
+      const pdf = await response.blob();
+      if (!pdf.type.toLowerCase().includes('pdf')) throw new Error('The server did not return a valid PDF invoice.');
+
+      const objectUrl = URL.createObjectURL(pdf);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = filenameFromHeader(
+        response.headers.get('Content-Disposition'),
+        `${invoice.invoiceNumber}.pdf`,
+      );
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+      setNotice(`${invoice.invoiceNumber} downloaded securely`);
+    } catch (error) {
+      setNotice((error as Error).message || 'The invoice could not be downloaded.');
+    } finally {
+      setDownloadingId('');
+    }
+  }
+
   const changePage = (nextPage: number) => {
+    if (nextPage < 1 || nextPage > pagination.totalPages || nextPage === page) return;
     setPage(nextPage);
     document.querySelector('.table-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
-  const downloadInvoice = (invoice: Invoice) => {
-    const taxable = Math.round(invoice.amount / 1.18);
-    const gst = invoice.amount - taxable;
-    const documentMarkup = `<!doctype html><html><head><meta charset="utf-8"><title>${invoice.invoiceNumber}</title><style>body{font-family:Arial,sans-serif;color:#172033;max-width:760px;margin:50px auto;padding:0 30px}header{display:flex;justify-content:space-between;border-bottom:2px solid #172033;padding-bottom:22px}h1{margin:0}.meta{margin:34px 0;line-height:1.8}.box{background:#f5f7fb;padding:22px;border-radius:10px}table{width:100%;border-collapse:collapse;margin-top:30px}th,td{text-align:left;padding:14px;border-bottom:1px solid #ddd}.totals{margin:28px 0 0 auto;width:290px}.totals p{display:flex;justify-content:space-between}.grand{font-weight:bold;font-size:18px;border-top:2px solid #172033;padding-top:14px}</style></head><body><header><div><h1>Tax Invoice</h1><p>GST Invoice Portal</p></div><strong>${invoice.invoiceNumber}</strong></header><div class="meta"><strong>Bill to</strong><br>${invoice.customerName}<br>Customer ID: ${invoice.customerId}<br>Date of purchase: ${invoice.date}</div><table><thead><tr><th>Product</th><th>Type</th><th>Amount</th></tr></thead><tbody><tr><td>${invoice.product}</td><td>${invoice.productType}</td><td>${formatCurrency(invoice.amount)}</td></tr></tbody></table><div class="totals"><p><span>Taxable value</span><span>${formatCurrency(taxable)}</span></p><p><span>GST (18%)</span><span>${formatCurrency(gst)}</span></p><p class="grand"><span>Total</span><span>${formatCurrency(invoice.amount)}</span></p></div></body></html>`;
-    const blob = new Blob([documentMarkup], { type: 'text/html' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${invoice.invoiceNumber}.html`;
-    link.click();
-    URL.revokeObjectURL(url);
-    setNotice(`${invoice.invoiceNumber} downloaded`);
-  };
+  const firstRecord = pagination.totalRecords === 0 ? 0 : (pagination.page - 1) * pagination.pageSize + 1;
+  const lastRecord = Math.min(pagination.page * pagination.pageSize, pagination.totalRecords);
 
   return (
     <main className="app-shell">
@@ -107,7 +301,7 @@ export default function Home() {
         <nav aria-label="Main navigation">
           <a className="nav-item active" href="#invoices"><span className="nav-icon" aria-hidden="true">▤</span>Invoices</a>
         </nav>
-        <div className="sidebar-note"><span className="status-dot" />Records are up to date</div>
+        <div className="sidebar-note"><span className="status-dot" />Invoice files stay private</div>
         <div className="sidebar-footer">
           <div className="avatar">AM</div>
           <div><strong>Arjun Mehta</strong><span>Administrator</span></div>
@@ -124,53 +318,67 @@ export default function Home() {
         <div className="content">
           <div className="page-heading">
             <div><p className="eyebrow">DOCUMENTS</p><h1>GST Invoices</h1><p>View and download customer purchase invoices.</p></div>
-            <div className="invoice-count"><strong>200</strong><span>Total invoices</span></div>
+            <div className="invoice-count"><strong>{pagination.totalRecords}</strong><span>Total invoices</span></div>
           </div>
 
-          <div className="table-card">
-            <div className="table-title"><div><h2>All invoices</h2><p>Customer purchase and tax records</p></div><span><i />Updated today</span></div>
+          <div className={`table-card ${isLoadingList ? 'is-loading' : ''}`} aria-busy={isLoadingList}>
+            <div className="table-title">
+              <div><h2>All invoices</h2><p>Customer purchase and tax records</p></div>
+              <span className={usingDemoData ? 'sample-state' : ''}><i />{usingDemoData ? 'Sample records' : 'Securely connected'}</span>
+            </div>
             <div className="table-wrap">
               <table>
                 <thead><tr><th>SR No.</th><th>Customer</th><th>Product</th><th>Product type</th><th>Date of purchase</th><th>Amount</th><th>Actions</th></tr></thead>
                 <tbody>
-                  {pageInvoices.map((invoice) => (
-                    <tr key={invoice.invoiceNumber}>
-                      <td><span className="serial">{invoice.serial}</span></td>
+                  {invoices.map((invoice) => (
+                    <tr key={invoice.id}>
+                      <td><span className="serial">{invoice.serialNumber}</span></td>
                       <td><div className="customer"><strong>{invoice.customerId}</strong><span>{invoice.customerName}</span></div></td>
-                      <td><div className="product"><strong>{invoice.product}</strong><span>{invoice.invoiceNumber}</span></div></td>
-                      <td><span className={`type-pill type-${invoice.productType.split(' ')[0].toLowerCase()}`}>{invoice.productType}</span></td>
-                      <td>{invoice.date}</td><td><strong className="amount">{formatCurrency(invoice.amount)}</strong></td>
-                      <td><div className="actions"><button type="button" onClick={() => setPreview(invoice)}><span aria-hidden="true">◉</span>Preview</button><button type="button" onClick={() => downloadInvoice(invoice)} aria-label={`Download ${invoice.invoiceNumber}`} title="Download invoice"><span aria-hidden="true">↓</span></button></div></td>
+                      <td><div className="product"><strong>{invoice.productName}</strong><span>{invoice.invoiceNumber}</span></div></td>
+                      <td><span className={`type-pill type-${invoice.productType.split('_')[0].toLowerCase()}`}>{productTypeLabels[invoice.productType] ?? invoice.productType}</span></td>
+                      <td>{formatDate(invoice.purchaseDate)}</td>
+                      <td><strong className="amount">{formatCurrency(invoice.amount, invoice.currency)}</strong></td>
+                      <td>
+                        <div className="actions">
+                          <button type="button" onClick={() => openPreview(invoice)} disabled={invoice.previewAvailable === false}><span aria-hidden="true">◉</span>Preview</button>
+                          <button type="button" onClick={() => downloadInvoice(invoice)} disabled={downloadingId === invoice.id} aria-label={`Download ${invoice.invoiceNumber}`} title="Download invoice"><span aria-hidden="true">{downloadingId === invoice.id ? '…' : '↓'}</span></button>
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
             <div className="pagination">
-              <p>Showing <strong>{(page - 1) * 10 + 1}–{page * 10}</strong> of <strong>200</strong></p>
+              <p>Showing <strong>{firstRecord}–{lastRecord}</strong> of <strong>{pagination.totalRecords}</strong></p>
               <div className="page-controls" aria-label="Pagination">
-                <button disabled={page === 1} onClick={() => changePage(page - 1)} aria-label="Previous page">‹</button>
-                {visiblePages(page).map((item) => typeof item === 'string' ? <span key={item}>…</span> : <button key={item} className={page === item ? 'current' : ''} onClick={() => changePage(item)} aria-label={`Page ${item}`} aria-current={page === item ? 'page' : undefined}>{item}</button>)}
-                <button disabled={page === TOTAL_PAGES} onClick={() => changePage(page + 1)} aria-label="Next page">›</button>
+                <button disabled={!pagination.hasPreviousPage || isLoadingList} onClick={() => changePage(page - 1)} aria-label="Previous page">‹</button>
+                {visiblePages(page, pagination.totalPages).map((item) => typeof item === 'string' ? <span key={item}>…</span> : <button key={item} disabled={isLoadingList} className={page === item ? 'current' : ''} onClick={() => changePage(item)} aria-label={`Page ${item}`} aria-current={page === item ? 'page' : undefined}>{item}</button>)}
+                <button disabled={!pagination.hasNextPage || isLoadingList} onClick={() => changePage(page + 1)} aria-label="Next page">›</button>
               </div>
             </div>
           </div>
-          <p className="footnote">Amounts shown are inclusive of applicable GST.</p>
+          <p className="footnote">Invoice PDFs are retrieved through an authenticated service. Private storage locations are never sent to this page.</p>
         </div>
       </section>
 
       {preview && (
-        <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setPreview(null)}>
-          <section className="invoice-modal" role="dialog" aria-modal="true" aria-labelledby="invoice-title">
-            <div className="modal-head"><div><span className="modal-kicker">TAX INVOICE</span><h2 id="invoice-title">{preview.invoiceNumber}</h2></div><button className="close-button" type="button" onClick={() => setPreview(null)} aria-label="Close invoice preview">×</button></div>
-            <div className="invoice-paper">
-              <div className="invoice-brand"><div className="brand-mark">P</div><div><strong>Portal Learning Pvt. Ltd.</strong><span>GSTIN: 27AABCP1234F1Z5</span></div><div className="paid-stamp">PAID</div></div>
-              <div className="invoice-meta"><div><span>Bill to</span><strong>{preview.customerName}</strong><p>Customer ID: {preview.customerId}</p></div><div><span>Invoice date</span><strong>{preview.date}</strong><p>Place of supply: India</p></div></div>
-              <div className="invoice-line"><div><span>Product</span><strong>{preview.product}</strong><small>{preview.productType}</small></div><strong>{formatCurrency(preview.amount)}</strong></div>
-              <div className="invoice-totals"><p><span>Taxable value</span><strong>{formatCurrency(Math.round(preview.amount / 1.18))}</strong></p><p><span>GST (18%)</span><strong>{formatCurrency(preview.amount - Math.round(preview.amount / 1.18))}</strong></p><p className="grand-total"><span>Total paid</span><strong>{formatCurrency(preview.amount)}</strong></p></div>
-              <p className="invoice-note">This is a computer-generated invoice and does not require a signature.</p>
+        <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && closePreview()}>
+          <section className="invoice-modal pdf-modal" role="dialog" aria-modal="true" aria-labelledby="invoice-title">
+            <div className="modal-head">
+              <div><span className="modal-kicker">SECURE INVOICE PREVIEW</span><h2 id="invoice-title">{preview.invoiceNumber}</h2></div>
+              <button className="close-button" type="button" onClick={closePreview} aria-label="Close invoice preview">×</button>
             </div>
-            <div className="modal-actions"><button type="button" className="secondary" onClick={() => setPreview(null)}>Close</button><button type="button" className="primary" onClick={() => downloadInvoice(preview)}><span aria-hidden="true">↓</span> Download invoice</button></div>
+            <div className="pdf-stage">
+              {isLoadingPreview && <div className="pdf-message" role="status"><span className="spinner" /><strong>Loading invoice securely…</strong><p>The private file is being streamed through the invoice service.</p></div>}
+              {previewError && <div className="pdf-message error-state" role="alert"><span className="error-mark">!</span><strong>Preview unavailable</strong><p>{previewError}</p><button type="button" onClick={() => openPreview(preview)}>Try again</button></div>}
+              {previewUrl && <iframe className="pdf-frame" src={previewUrl} title={`Preview of ${preview.invoiceNumber}`} />}
+            </div>
+            <div className="modal-actions">
+              <span className="secure-label"><i />Private R2 location hidden</span>
+              <button type="button" className="secondary" onClick={closePreview}>Close</button>
+              <button type="button" className="primary" disabled={downloadingId === preview.id} onClick={() => downloadInvoice(preview)}><span aria-hidden="true">{downloadingId === preview.id ? '…' : '↓'}</span> Download invoice</button>
+            </div>
           </section>
         </div>
       )}
