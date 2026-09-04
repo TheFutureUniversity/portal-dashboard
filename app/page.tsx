@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 
 type Invoice = {
@@ -27,27 +27,6 @@ type Pagination = {
   hasNextPage: boolean;
 };
 
-const customers = [
-  ['CUS-10482', 'Aarav Mehta'], ['CUS-10481', 'Riya Sharma'],
-  ['CUS-10480', 'Kabir Khanna'], ['CUS-10479', 'Meera Iyer'],
-  ['CUS-10478', 'Vihaan Shah'], ['CUS-10477', 'Ananya Rao'],
-  ['CUS-10476', 'Arjun Nair'], ['CUS-10475', 'Diya Kapoor'],
-  ['CUS-10474', 'Aditya Joshi'], ['CUS-10473', 'Sara Verma'],
-];
-
-const products = [
-  ['Swing Trading Bootcamp', 'LIVE_LEARNING_COURSE'],
-  ['Options Strategy eBook', 'EBOOK'],
-  ['Trading Desk Journal', 'PHYSICAL_PRODUCT'],
-  ['Emerald Focus Stone', 'SEMI_PRECIOUS_GEMSTONE'],
-  ['Momentum Trading Masterclass', 'LIVE_LEARNING_COURSE'],
-  ['Price Action Playbook', 'EBOOK'],
-  ['Market Discipline Planner', 'PHYSICAL_PRODUCT'],
-  ['Amethyst Clarity Stone', 'SEMI_PRECIOUS_GEMSTONE'],
-  ['Technical Analysis Intensive', 'LIVE_LEARNING_COURSE'],
-  ['Trading Psychology Guide', 'EBOOK'],
-];
-
 const productTypeLabels: Record<string, string> = {
   LIVE_LEARNING_COURSE: 'LIVE Learning Course',
   EBOOK: 'eBooks',
@@ -55,54 +34,35 @@ const productTypeLabels: Record<string, string> = {
   SEMI_PRECIOUS_GEMSTONE: 'Semi Precious Gemstones',
 };
 
-const amounts = [14999, 1499, 2899, 4599, 9999, 899, 1899, 3299, 11999, 1199];
 const PAGE_SIZE = 10;
 const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL ?? '').replace(/\/$/, '');
 
-const demoInvoices: Invoice[] = Array.from({ length: 200 }, (_, index) => {
-  const customer = customers[index % customers.length];
-  const product = products[index % products.length];
-  const purchaseDate = new Date(Date.UTC(2026, 7, 28 - index));
-  return {
-    id: `inv_${String(482 - index).padStart(5, '0')}`,
-    serialNumber: index + 1,
-    invoiceNumber: `GST-2026-${String(482 - index).padStart(5, '0')}`,
-    customerId: customer[0],
-    customerName: customer[1],
-    productName: product[0],
-    productType: product[1],
-    purchaseDate: purchaseDate.toISOString().slice(0, 10),
-    amount: amounts[index % amounts.length],
-    currency: 'INR',
-    status: 'PAID',
-    previewAvailable: true,
-  };
-});
-
-const defaultPagination: Pagination = {
+const emptyPagination: Pagination = {
   page: 1,
   pageSize: PAGE_SIZE,
-  totalRecords: 200,
-  totalPages: 20,
+  totalRecords: 0,
+  totalPages: 0,
   hasPreviousPage: false,
-  hasNextPage: true,
+  hasNextPage: false,
 };
 
 function apiUrl(path: string) {
   return `${API_BASE_URL}/api/v1${path}`;
 }
 
-function formatCurrency(value: number, currency = 'INR') {
+function formatCurrency(value: number) {
   return new Intl.NumberFormat('en-IN', {
     style: 'currency',
-    currency,
+    currency: 'INR',
     maximumFractionDigits: 0,
   }).format(value);
 }
 
 function formatDate(value: string) {
   const isoDate = /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00Z` : value;
-  return new Date(isoDate).toLocaleDateString('en-GB', {
+  const date = new Date(isoDate);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleDateString('en-GB', {
     day: '2-digit',
     month: 'short',
     year: 'numeric',
@@ -127,7 +87,15 @@ function filenameFromHeader(header: string | null, fallback: string) {
 function responseError(status: number) {
   if (status === 401) return 'Your session has expired. Please sign in again.';
   if (status === 403 || status === 404) return 'This invoice is not available to your account.';
+  if (status === 429) return 'Too many requests. Please wait a moment and try again.';
   return 'The invoice service is temporarily unavailable.';
+}
+
+function listErrorFor(status: number) {
+  if (status === 401) return { status, title: 'Session expired', message: 'Please sign in again to view your invoices.' };
+  if (status === 404) return { status, title: 'Invoice service not found', message: 'The invoice endpoint could not be reached.' };
+  if (status === 429) return { status, title: 'Too many requests', message: 'Please wait a moment before trying again.' };
+  return { status, title: 'Unable to load invoices', message: 'The invoice service is temporarily unavailable.' };
 }
 
 export default function Home() {
@@ -137,18 +105,16 @@ export default function Home() {
   const [loginError, setLoginError] = useState('');
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [page, setPage] = useState(1);
-  const [invoices, setInvoices] = useState<Invoice[]>(demoInvoices.slice(0, PAGE_SIZE));
-  const [pagination, setPagination] = useState<Pagination>(defaultPagination);
-  const [isLoadingList, setIsLoadingList] = useState(false);
-  const [usingDemoData, setUsingDemoData] = useState(true);
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [pagination, setPagination] = useState<Pagination>(emptyPagination);
+  const [listState, setListState] = useState<'loading' | 'success' | 'error'>('loading');
+  const [listError, setListError] = useState<{ status: number; title: string; message: string } | null>(null);
+  const [retryToken, setRetryToken] = useState(0);
   const [preview, setPreview] = useState<Invoice | null>(null);
-  const [previewUrl, setPreviewUrl] = useState('');
   const [previewError, setPreviewError] = useState('');
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const [downloadingId, setDownloadingId] = useState('');
   const [notice, setNotice] = useState('');
-  const previewUrlRef = useRef('');
-  const previewRequestRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -169,48 +135,43 @@ export default function Home() {
     const controller = new AbortController();
 
     async function loadInvoices() {
-      setIsLoadingList(true);
+      setListState('loading');
+      setListError(null);
       try {
         const response = await fetch(apiUrl(`/invoices?page=${page}&pageSize=${PAGE_SIZE}`), {
           credentials: 'include',
           headers: { Accept: 'application/json' },
           signal: controller.signal,
         });
-        if (!response.ok) throw new Error(`Invoice list returned ${response.status}`);
+        if (!response.ok) {
+          setInvoices([]);
+          setPagination({ ...emptyPagination, page });
+          setListError(listErrorFor(response.status));
+          setListState('error');
+          return;
+        }
         const payload = await response.json() as { data: Invoice[]; pagination: Pagination };
         if (!Array.isArray(payload.data) || !payload.pagination) throw new Error('Invalid invoice response');
         setInvoices(payload.data);
         setPagination(payload.pagination);
-        setUsingDemoData(false);
+        setListState('success');
       } catch (error) {
         if ((error as Error).name === 'AbortError') return;
-        const start = (page - 1) * PAGE_SIZE;
-        setInvoices(demoInvoices.slice(start, start + PAGE_SIZE));
-        setPagination({
-          ...defaultPagination,
-          page,
-          hasPreviousPage: page > 1,
-          hasNextPage: page < defaultPagination.totalPages,
-        });
-        setUsingDemoData(true);
-      } finally {
-        if (!controller.signal.aborted) setIsLoadingList(false);
+        setInvoices([]);
+        setPagination({ ...emptyPagination, page });
+        setListError(listErrorFor(0));
+        setListState('error');
       }
     }
 
     loadInvoices();
     return () => controller.abort();
-  }, [authState, page]);
+  }, [authState, page, retryToken]);
 
   useEffect(() => {
     if (!preview) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      previewRequestRef.current?.abort();
-      previewRequestRef.current = null;
-      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
-      previewUrlRef.current = '';
-      setPreviewUrl('');
       setPreview(null);
       setPreviewError('');
       setIsLoadingPreview(false);
@@ -225,55 +186,16 @@ export default function Home() {
     return () => window.clearTimeout(timeout);
   }, [notice]);
 
-  useEffect(() => () => {
-    previewRequestRef.current?.abort();
-    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
-  }, []);
-
-  function clearPreviewAsset() {
-    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
-    previewUrlRef.current = '';
-    setPreviewUrl('');
-  }
-
   function closePreview() {
-    previewRequestRef.current?.abort();
-    previewRequestRef.current = null;
-    clearPreviewAsset();
     setPreview(null);
     setPreviewError('');
     setIsLoadingPreview(false);
   }
 
-  async function openPreview(invoice: Invoice) {
-    previewRequestRef.current?.abort();
-    clearPreviewAsset();
+  function openPreview(invoice: Invoice) {
     setPreview(invoice);
     setPreviewError('');
     setIsLoadingPreview(true);
-
-    const controller = new AbortController();
-    previewRequestRef.current = controller;
-
-    try {
-      const response = await fetch(apiUrl(`/invoices/${encodeURIComponent(invoice.id)}/preview`), {
-        credentials: 'include',
-        headers: { Accept: 'application/pdf' },
-        signal: controller.signal,
-      });
-      if (!response.ok) throw new Error(responseError(response.status));
-      const pdf = await response.blob();
-      if (!pdf.type.toLowerCase().includes('pdf')) throw new Error('The server did not return a valid PDF invoice.');
-      const objectUrl = URL.createObjectURL(pdf);
-      previewUrlRef.current = objectUrl;
-      setPreviewUrl(objectUrl);
-    } catch (error) {
-      if ((error as Error).name !== 'AbortError') {
-        setPreviewError((error as Error).message || 'The invoice preview could not be loaded.');
-      }
-    } finally {
-      if (!controller.signal.aborted) setIsLoadingPreview(false);
-    }
   }
 
   async function downloadInvoice(invoice: Invoice) {
@@ -398,42 +320,50 @@ export default function Home() {
             <div><p className="eyebrow">DOCUMENTS</p><h1>GST Invoices</h1><p>View and download customer purchase invoices.</p></div>
           </div>
 
-          <div className={`table-card ${isLoadingList ? 'is-loading' : ''}`} aria-busy={isLoadingList}>
+          <div className={`table-card ${listState === 'loading' ? 'is-loading' : ''}`} aria-busy={listState === 'loading'}>
             <div className="table-title">
               <div><h2>All invoices</h2><p>Customer purchase and tax records</p></div>
-              <span className={usingDemoData ? 'sample-state' : ''}><i />{usingDemoData ? 'Sample records' : 'Securely connected'}</span>
+              <span className={listState === 'error' ? 'error-indicator' : ''}><i />{listState === 'error' ? 'Service unavailable' : 'Securely connected'}</span>
             </div>
             <div className="table-wrap">
               <table>
-                <thead><tr><th>SR No.</th><th>Customer</th><th>Product</th><th>Product type</th><th>Date of purchase</th><th>Amount</th><th>Actions</th></tr></thead>
+                <thead><tr><th>SR No.</th><th>Invoice</th><th>Customer</th><th>Product</th><th>Product type</th><th>Date of purchase</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead>
                 <tbody>
-                  {invoices.map((invoice) => (
+                  {listState === 'loading' && (
+                    <tr className="state-row"><td colSpan={9}><div className="table-state"><span className="spinner" /><strong>Loading invoices…</strong><p>Retrieving the latest invoice records.</p></div></td></tr>
+                  )}
+                  {listState === 'error' && listError && (
+                    <tr className="state-row"><td colSpan={9}><div className="table-state error-state"><span className="error-mark">!</span><strong>{listError.title}</strong><p>{listError.message}</p><button type="button" onClick={() => listError.status === 401 ? signOut() : setRetryToken((value) => value + 1)}>{listError.status === 401 ? 'Sign in again' : 'Try again'}</button></div></td></tr>
+                  )}
+                  {listState === 'success' && invoices.length === 0 && (
+                    <tr className="state-row"><td colSpan={9}><div className="table-state empty-state"><span className="empty-mark">▤</span><strong>No invoices available</strong><p>There are no invoice records to display.</p></div></td></tr>
+                  )}
+                  {listState === 'success' && invoices.map((invoice) => (
                     <tr key={invoice.id}>
                       <td><span className="serial">{invoice.serialNumber}</span></td>
+                      <td><strong className="invoice-number">{invoice.invoiceNumber}</strong></td>
                       <td><div className="customer"><strong>{invoice.customerId}</strong><span>{invoice.customerName}</span></div></td>
-                      <td><div className="product"><strong>{invoice.productName}</strong><span>{invoice.invoiceNumber}</span></div></td>
+                      <td><div className="product"><strong>{invoice.productName}</strong></div></td>
                       <td><span className={`type-pill type-${invoice.productType.split('_')[0].toLowerCase()}`}>{productTypeLabels[invoice.productType] ?? invoice.productType}</span></td>
                       <td>{formatDate(invoice.purchaseDate)}</td>
-                      <td><strong className="amount">{formatCurrency(invoice.amount, invoice.currency)}</strong></td>
+                      <td><strong className="amount">{formatCurrency(invoice.amount)}</strong></td>
+                      <td><span className={`status-pill status-${invoice.status.toLowerCase()}`}>{invoice.status}</span></td>
                       <td>
-                        <div className="actions">
-                          <button type="button" onClick={() => openPreview(invoice)} disabled={invoice.previewAvailable === false}><span aria-hidden="true">◉</span>Preview</button>
-                          <button type="button" onClick={() => downloadInvoice(invoice)} disabled={downloadingId === invoice.id} aria-label={`Download ${invoice.invoiceNumber}`} title="Download invoice"><span aria-hidden="true">{downloadingId === invoice.id ? '…' : '↓'}</span></button>
-                        </div>
+                        {invoice.previewAvailable === true ? <div className="actions"><button type="button" onClick={() => openPreview(invoice)}><span aria-hidden="true">◉</span>Preview</button><button type="button" onClick={() => downloadInvoice(invoice)} disabled={downloadingId === invoice.id} aria-label={`Download ${invoice.invoiceNumber}`} title="Download invoice"><span aria-hidden="true">{downloadingId === invoice.id ? '…' : '↓'}</span></button></div> : <span className="no-actions">—</span>}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-            <div className="pagination">
+            {listState === 'success' && invoices.length > 0 && <div className="pagination">
               <p>Showing <strong>{firstRecord}–{lastRecord}</strong> of <strong>{pagination.totalRecords}</strong></p>
               <div className="page-controls" aria-label="Pagination">
-                <button disabled={!pagination.hasPreviousPage || isLoadingList} onClick={() => changePage(page - 1)} aria-label="Previous page">‹</button>
-                {visiblePages(page, pagination.totalPages).map((item) => typeof item === 'string' ? <span key={item}>…</span> : <button key={item} disabled={isLoadingList} className={page === item ? 'current' : ''} onClick={() => changePage(item)} aria-label={`Page ${item}`} aria-current={page === item ? 'page' : undefined}>{item}</button>)}
-                <button disabled={!pagination.hasNextPage || isLoadingList} onClick={() => changePage(page + 1)} aria-label="Next page">›</button>
+                <button disabled={!pagination.hasPreviousPage} onClick={() => changePage(page - 1)} aria-label="Previous page">‹</button>
+                {visiblePages(page, pagination.totalPages).map((item) => typeof item === 'string' ? <span key={item}>…</span> : <button key={item} className={page === item ? 'current' : ''} onClick={() => changePage(item)} aria-label={`Page ${item}`} aria-current={page === item ? 'page' : undefined}>{item}</button>)}
+                <button disabled={!pagination.hasNextPage} onClick={() => changePage(page + 1)} aria-label="Next page">›</button>
               </div>
-            </div>
+            </div>}
           </div>
           <p className="footnote">Invoice PDFs are retrieved through an authenticated service. Private storage locations are never sent to this page.</p>
         </div>
@@ -447,12 +377,12 @@ export default function Home() {
               <button className="close-button" type="button" onClick={closePreview} aria-label="Close invoice preview">×</button>
             </div>
             <div className="pdf-stage">
-              {isLoadingPreview && <div className="pdf-message" role="status"><span className="spinner" /><strong>Loading invoice securely…</strong><p>The private file is being streamed through the invoice service.</p></div>}
+              {!previewError && <iframe className="pdf-frame" src={apiUrl(`/invoices/${encodeURIComponent(preview.id)}/preview`)} title={`Preview of ${preview.invoiceNumber}`} onLoad={() => setIsLoadingPreview(false)} onError={() => { setIsLoadingPreview(false); setPreviewError('The invoice preview could not be loaded.'); }} />}
+              {isLoadingPreview && <div className="pdf-message" role="status"><span className="spinner" /><strong>Loading invoice securely…</strong><p>The PDF is being streamed through the authenticated invoice endpoint.</p></div>}
               {previewError && <div className="pdf-message error-state" role="alert"><span className="error-mark">!</span><strong>Preview unavailable</strong><p>{previewError}</p><button type="button" onClick={() => openPreview(preview)}>Try again</button></div>}
-              {previewUrl && <iframe className="pdf-frame" src={previewUrl} title={`Preview of ${preview.invoiceNumber}`} />}
             </div>
             <div className="modal-actions">
-              <span className="secure-label"><i />Private R2 location hidden</span>
+              <span className="secure-label"><i />Authenticated invoice stream</span>
               <button type="button" className="secondary" onClick={closePreview}>Close</button>
               <button type="button" className="primary" disabled={downloadingId === preview.id} onClick={() => downloadInvoice(preview)}><span aria-hidden="true">{downloadingId === preview.id ? '…' : '↓'}</span> Download invoice</button>
             </div>
