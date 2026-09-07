@@ -60,6 +60,13 @@ function cookieValue(request: Request, name: string) {
   return '';
 }
 
+function cookieDomain(request: Request) {
+  const hostname = new URL(request.url).hostname;
+  return hostname === 'thefuture.university' || hostname.endsWith('.thefuture.university')
+    ? '; Domain=.thefuture.university'
+    : '';
+}
+
 export function authIsConfigured() {
   return Boolean(configuredPassword() && sessionSecret());
 }
@@ -80,11 +87,11 @@ export async function requestHasValidSession(request: Request) {
   return constantTimeEqual(suppliedToken, await createSessionToken());
 }
 
-export async function sessionCookie() {
+export async function sessionCookie(request: Request) {
   const token = await createSessionToken();
-  return `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${SESSION_MAX_AGE}`;
+  return `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${SESSION_MAX_AGE}${cookieDomain(request)}`;
 }
 
-export function expiredSessionCookie() {
-  return `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`;
+export function expiredSessionCookie(request: Request) {
+  return `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0${cookieDomain(request)}`;
 }
