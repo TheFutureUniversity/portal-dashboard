@@ -85,14 +85,14 @@ function filenameFromHeader(header: string | null, fallback: string) {
 }
 
 function responseError(status: number) {
-  if (status === 401) return 'Your session has expired. Please sign in again.';
+  if (status === 401) return 'The invoice API rejected this request.';
   if (status === 403 || status === 404) return 'This invoice is not available to your account.';
   if (status === 429) return 'Too many requests. Please wait a moment and try again.';
   return 'The invoice service is temporarily unavailable.';
 }
 
 function listErrorFor(status: number) {
-  if (status === 401) return { status, title: 'Session expired', message: 'Please sign in again to view your invoices.' };
+  if (status === 401) return { status, title: 'Invoice API unavailable', message: 'The invoice service rejected this request.' };
   if (status === 404) return { status, title: 'Invoice service not found', message: 'The invoice endpoint could not be reached.' };
   if (status === 429) return { status, title: 'Too many requests', message: 'Please wait a moment before trying again.' };
   return { status, title: 'Unable to load invoices', message: 'The invoice service is temporarily unavailable.' };
@@ -333,7 +333,7 @@ export default function Home() {
                     <tr className="state-row"><td colSpan={9}><div className="table-state"><span className="spinner" /><strong>Loading invoices…</strong><p>Retrieving the latest invoice records.</p></div></td></tr>
                   )}
                   {listState === 'error' && listError && (
-                    <tr className="state-row"><td colSpan={9}><div className="table-state error-state"><span className="error-mark">!</span><strong>{listError.title}</strong><p>{listError.message}</p><button type="button" onClick={() => listError.status === 401 ? signOut() : setRetryToken((value) => value + 1)}>{listError.status === 401 ? 'Sign in again' : 'Try again'}</button></div></td></tr>
+                    <tr className="state-row"><td colSpan={9}><div className="table-state error-state"><span className="error-mark">!</span><strong>{listError.title}</strong><p>{listError.message}</p><button type="button" onClick={() => setRetryToken((value) => value + 1)}>Try again</button></div></td></tr>
                   )}
                   {listState === 'success' && invoices.length === 0 && (
                     <tr className="state-row"><td colSpan={9}><div className="table-state empty-state"><span className="empty-mark">▤</span><strong>No invoices available</strong><p>There are no invoice records to display.</p></div></td></tr>
