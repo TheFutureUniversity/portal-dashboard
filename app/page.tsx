@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 
 type Invoice = {
@@ -111,10 +111,13 @@ export default function Home() {
   const [listError, setListError] = useState<{ status: number; title: string; message: string } | null>(null);
   const [retryToken, setRetryToken] = useState(0);
   const [preview, setPreview] = useState<Invoice | null>(null);
+  const [previewUrl, setPreviewUrl] = useState('');
   const [previewError, setPreviewError] = useState('');
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const [downloadingId, setDownloadingId] = useState('');
   const [notice, setNotice] = useState('');
+  const previewUrlRef = useRef('');
+  const previewRequestRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -172,6 +175,11 @@ export default function Home() {
     if (!preview) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
+      previewRequestRef.current?.abort();
+      previewRequestRef.current = null;
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = '';
+      setPreviewUrl('');
       setPreview(null);
       setPreviewError('');
       setIsLoadingPreview(false);
@@ -186,16 +194,67 @@ export default function Home() {
     return () => window.clearTimeout(timeout);
   }, [notice]);
 
+  useEffect(() => () => {
+    previewRequestRef.current?.abort();
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+  }, []);
+
+  function clearPreviewUrl() {
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    previewUrlRef.current = '';
+    setPreviewUrl('');
+  }
+
   function closePreview() {
+    previewRequestRef.current?.abort();
+    previewRequestRef.current = null;
+    clearPreviewUrl();
     setPreview(null);
     setPreviewError('');
     setIsLoadingPreview(false);
   }
 
-  function openPreview(invoice: Invoice) {
+  async function openPreview(invoice: Invoice) {
+    previewRequestRef.current?.abort();
+    clearPreviewUrl();
     setPreview(invoice);
     setPreviewError('');
     setIsLoadingPreview(true);
+
+    const controller = new AbortController();
+    previewRequestRef.current = controller;
+
+    try {
+      const response = await fetch(apiUrl(`/invoices/${encodeURIComponent(invoice.id)}/preview`), {
+        credentials: 'include',
+        headers: { Accept: 'application/pdf' },
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(responseError(response.status));
+
+      const pdf = await response.blob();
+      if (!pdf.type.toLowerCase().includes('pdf')) {
+        throw new Error('The server did not return a valid PDF invoice.');
+      }
+
+      const objectUrl = URL.createObjectURL(pdf);
+      if (controller.signal.aborted) {
+        URL.revokeObjectURL(objectUrl);
+        return;
+      }
+
+      previewUrlRef.current = objectUrl;
+      setPreviewUrl(objectUrl);
+    } catch (error) {
+      if ((error as Error).name !== 'AbortError') {
+        setPreviewError((error as Error).message || 'The invoice preview could not be loaded.');
+      }
+    } finally {
+      if (previewRequestRef.current === controller) {
+        previewRequestRef.current = null;
+        setIsLoadingPreview(false);
+      }
+    }
   }
 
   async function downloadInvoice(invoice: Invoice) {
@@ -377,7 +436,7 @@ export default function Home() {
               <button className="close-button" type="button" onClick={closePreview} aria-label="Close invoice preview">×</button>
             </div>
             <div className="pdf-stage">
-              {!previewError && <iframe className="pdf-frame" src={apiUrl(`/invoices/${encodeURIComponent(preview.id)}/preview`)} title={`Preview of ${preview.invoiceNumber}`} onLoad={() => setIsLoadingPreview(false)} onError={() => { setIsLoadingPreview(false); setPreviewError('The invoice preview could not be loaded.'); }} />}
+              {previewUrl && !previewError && <iframe className="pdf-frame" src={previewUrl} title={`Preview of ${preview.invoiceNumber}`} />}
               {isLoadingPreview && <div className="pdf-message" role="status"><span className="spinner" /><strong>Loading invoice securely…</strong><p>The PDF is being streamed through the authenticated invoice endpoint.</p></div>}
               {previewError && <div className="pdf-message error-state" role="alert"><span className="error-mark">!</span><strong>Preview unavailable</strong><p>{previewError}</p><button type="button" onClick={() => openPreview(preview)}>Try again</button></div>}
             </div>
